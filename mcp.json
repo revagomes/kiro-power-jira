@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "jira": {
+      "command": "uvx",
+      "args": ["--from", "fastmcp", "fastmcp", "run", "/PATH/TO/kiro-power-jira/server/jira_mcp.py"],
+      "env": {
+        "JIRA_PAT": "${env:JIRA_PAT}",
+        "JIRA_BASE_URL": "${env:JIRA_BASE_URL}",
+        "JIRA_PROJECT": "${env:JIRA_PROJECT}"
+      }
+    }
+  }
+}
