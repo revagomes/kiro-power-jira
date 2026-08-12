@@ -18,6 +18,7 @@ import json
 import os
 import pathlib
 import re
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -71,9 +72,19 @@ def _load_env() -> None:
       - Inline comments (`` # ...``) for unquoted values
 
     Will NOT overwrite variables already present in the environment.
+
+    Trust assumption:
+      The .env file is trusted local-only configuration. It MUST NOT be
+      writable by untrusted parties. The file grants control over
+      JIRA_BASE_URL and JIRA_PAT — an attacker with write access to
+      server/.env can redirect API calls and capture the token.
     """
     env_path = pathlib.Path(__file__).parent / ".env"
     if env_path.is_file():
+        print(
+            f"[jira-mcp] Loading configuration from {env_path}",
+            file=sys.stderr,
+        )
         for line in env_path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line or line.startswith("#"):
@@ -130,6 +141,7 @@ def _check_config() -> None:
 
     Checks the module-level constants (which are the values actually used by
     API calls) rather than live os.environ, to stay self-consistent.
+    Also enforces HTTPS to prevent credential leakage over cleartext.
     """
     missing = []
     if not os.environ.get("JIRA_PAT"):
@@ -147,6 +159,13 @@ def _check_config() -> None:
             f"    export JIRA_BASE_URL=https://jira.example.com\n"
             f"    export JIRA_PROJECT=MYPROJ"
         )
+    # Enforce HTTPS to prevent transmitting the Bearer token in cleartext.
+    if JIRA_BASE_URL and not JIRA_BASE_URL.startswith("https://"):
+        raise RuntimeError(
+            "JIRA_BASE_URL must use HTTPS to protect credentials in transit. "
+            f"Got: {JIRA_BASE_URL!r}. "
+            "Change it to start with https:// ."
+        )
 
 
 def _validate_key(ticket: str) -> str:
@@ -159,10 +178,36 @@ def _validate_key(ticket: str) -> str:
     return normalized
 
 
+def _validate_jql(jql: str) -> str:
+    """Validate a JQL string: reject control characters and null bytes.
+
+    JQL is parsed server-side by JIRA. This client-side check prevents
+    obviously malformed input from reaching the API. Cross-project queries
+    are constrained by JIRA's permission model (the configured PAT's access),
+    not by this client.
+    """
+    if "\x00" in jql or any(
+        c != "\n" and c != "\r" and c != "\t" and ord(c) < 32 for c in jql
+    ):
+        raise ValueError(
+            "Invalid JQL: contains control characters or null bytes."
+        )
+    return jql
+
+
 def _get_pat() -> str:
     """Get JIRA PAT from environment."""
     _check_config()
     return os.environ["JIRA_PAT"]
+
+
+def _quote_path(value: str) -> str:
+    """URL-encode a value for safe inclusion in a URL path or query parameter.
+
+    Applies percent-encoding to all special characters (including /, ?, #, &)
+    so the value cannot break out of its path segment or query parameter slot.
+    """
+    return urllib.parse.quote(value, safe="")
 
 
 def _api_request(
@@ -178,6 +223,10 @@ def _api_request(
 
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
+        # 30-second timeout bounds worst-case hang when JIRA is slow or
+        # unreachable.  Adequate for all normal API calls including search
+        # pagination.  Not currently configurable — revisit if deployments
+        # with known-slow instances need a longer window.
         with urllib.request.urlopen(req, timeout=30) as resp:
             body = resp.read()
             if not body:
@@ -187,15 +236,23 @@ def _api_request(
         body = e.read().decode() if e.fp else ""
         try:
             err = json.loads(body)
+            # Surface only JIRA's user-facing error messages, not raw internals.
             msgs = err.get("errorMessages", []) + list(
                 err.get("errors", {}).values()
             )
+            if msgs:
+                raise RuntimeError(
+                    f"JIRA API error ({e.code}): {'; '.join(msgs)}"
+                ) from e
+            # Structured response but no user-facing messages — generic error.
             raise RuntimeError(
-                f"JIRA API error ({e.code}): {'; '.join(msgs)}"
+                f"JIRA API error ({e.code}): request failed"
             ) from e
         except (json.JSONDecodeError, AttributeError):
+            # Do not leak raw response body — it may contain internal details.
             raise RuntimeError(
-                f"JIRA API error ({e.code}): {body[:300]}"
+                f"JIRA API error ({e.code}): request failed "
+                f"(non-JSON response from server)"
             ) from e
     except urllib.error.URLError as e:
         raise RuntimeError(f"Connection failed: {e.reason}") from e
@@ -225,6 +282,7 @@ def _fetch_issues(
     jql: str, fields: str = FIELDS_LIST, max_results: int = 50
 ) -> list:
     """Fetch issues with pagination. Hard cap at 1000 to prevent runaway."""
+    _validate_jql(jql)
     issues: list = []
     start = 0
     hard_cap = 1000
@@ -552,7 +610,7 @@ def jira_link(ticket: str, target: str, link_type: str = "Relates") -> dict:
 @mcp.tool()
 def jira_boards() -> list[dict]:
     """List Scrum/Kanban boards for the configured project."""
-    data = _agile_get(f"/board?projectKeyOrId={PROJECT}&maxResults=50")
+    data = _agile_get(f"/board?projectKeyOrId={_quote_path(PROJECT)}&maxResults=50")
     return [
         {"id": b["id"], "name": b["name"], "type": b.get("type", "")}
         for b in data.get("values", [])
