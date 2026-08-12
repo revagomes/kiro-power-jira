@@ -1,0 +1,47 @@
+{
+  "name": "lagune",
+  "entries": [
+    {
+      "name": "Bearer token in every outbound request",
+      "paths": [
+        "server/jira_mcp.py"
+      ]
+    },
+    {
+      "name": "No HTTPS enforcement on outbound requests",
+      "paths": [
+        "server/jira_mcp.py"
+      ]
+    },
+    {
+      "name": "Ticket key validated but JQL passed through unescaped",
+      "paths": [
+        "server/jira_mcp.py"
+      ]
+    },
+    {
+      "name": "Error responses may expose internal details",
+      "paths": [
+        "server/jira_mcp.py"
+      ]
+    },
+    {
+      "name": ".env file loader reads from a fixed path",
+      "paths": [
+        "server/jira_mcp.py"
+      ]
+    },
+    {
+      "name": "No request timeout surfaced to the user",
+      "paths": [
+        "server/jira_mcp.py"
+      ]
+    },
+    {
+      "name": "URL construction via string concatenation",
+      "paths": [
+        "server/jira_mcp.py"
+      ]
+    }
+  ]
+}
