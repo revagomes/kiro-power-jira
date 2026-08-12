@@ -16,6 +16,7 @@ Run via:
 
 import json
 import os
+import pathlib
 import re
 import time
 import urllib.error
@@ -23,6 +24,83 @@ import urllib.parse
 import urllib.request
 
 from fastmcp import FastMCP
+
+
+# ── Environment bootstrap ─────────────────────────────────────────────────────
+def _unquote(value: str) -> str:
+    """Strip balanced surrounding quotes from a value (single or double)."""
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("\"", "'"):
+        return value[1:-1]
+    return value
+
+
+def _parse_env_value(raw: str) -> str:
+    """Parse a .env value: strip inline comments (outside quotes), then unquote.
+
+    Inline comments are recognised as ' #' (space + hash) only when the value
+    is not quoted.  Quoted values are returned verbatim (minus the quotes).
+    """
+    raw = raw.strip()
+    # If the value starts with a quote, find the matching closing quote.
+    if raw and raw[0] in ("\"", "'"):
+        quote = raw[0]
+        end = raw.find(quote, 1)
+        if end != -1:
+            return raw[1:end]
+        # No closing quote — return as-is without the opening quote.
+        return raw[1:]
+    # Unquoted value: strip trailing inline comment (space + #).
+    if " #" in raw:
+        raw = raw[: raw.index(" #")]
+    return raw.strip()
+
+
+def _load_env() -> None:
+    """Bootstrap environment variables from a .env file next to this script.
+
+    Resolution order for each variable:
+      1. Already set in os.environ (e.g. shell export or MCP env block)
+      2. Loaded from a .env file next to this script
+      3. Known aliases (JIRA_URL -> JIRA_BASE_URL)
+
+    Supports:
+      - Comments (lines starting with #)
+      - Blank lines
+      - export prefix (``export KEY=VALUE``)
+      - Balanced single/double quoting
+      - Inline comments (`` # ...``) for unquoted values
+
+    Will NOT overwrite variables already present in the environment.
+    """
+    env_path = pathlib.Path(__file__).parent / ".env"
+    if env_path.is_file():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            # Strip optional 'export' prefix.
+            if line.startswith("export "):
+                line = line[7:]
+            if "=" not in line:
+                continue
+            key, _, raw_value = line.partition("=")
+            key = key.strip()
+            value = _parse_env_value(raw_value)
+            # Don't overwrite vars already in the environment.
+            if key and key not in os.environ:
+                os.environ[key] = value
+
+    # Fallback: JIRA_URL -> JIRA_BASE_URL (common alias).
+    if not os.environ.get("JIRA_BASE_URL") and os.environ.get("JIRA_URL"):
+        os.environ["JIRA_BASE_URL"] = os.environ["JIRA_URL"]
+
+
+# Only bootstrap .env when running as the MCP server (not when imported as a
+# library, e.g. in tests).  When executed via ``fastmcp run``, __name__ is
+# "__main__" at the module level — but FastMCP actually executes the file as a
+# script, so we guard on a module-level flag that tests can disable.
+if os.environ.get("_JIRA_MCP_SKIP_ENV") != "1":
+    _load_env()
 
 # ── Config (all from environment) ─────────────────────────────────────────────
 JIRA_BASE_URL = os.environ.get("JIRA_BASE_URL", "")
