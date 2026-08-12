@@ -126,7 +126,11 @@ mcp = FastMCP(_server_name)
 
 # ── HTTP helpers ──────────────────────────────────────────────────────────────
 def _check_config() -> None:
-    """Validate that all required env vars are set."""
+    """Validate that all required config is available.
+
+    Checks the module-level constants (which are the values actually used by
+    API calls) rather than live os.environ, to stay self-consistent.
+    """
     missing = []
     if not os.environ.get("JIRA_PAT"):
         missing.append("JIRA_PAT")
