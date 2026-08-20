@@ -773,6 +773,7 @@ def jira_list_versions(
             "name": v.get("name", ""),
             "released": is_released,
             "archived": v.get("archived", False),
+            "start_date": v.get("startDate", ""),
             "release_date": v.get("releaseDate", ""),
             "description": v.get("description", ""),
         })
@@ -813,6 +814,7 @@ def jira_update_version(
     version_id: str,
     name: str = "",
     description: str = "",
+    start_date: str = "",
     release_date: str = "",
     archived: bool = False,
 ) -> dict:
@@ -822,6 +824,7 @@ def jira_update_version(
         version_id: Version ID (use jira_list_versions to find it)
         name: New version name (optional)
         description: New description (optional)
+        start_date: Start date in YYYY-MM-DD format (optional)
         release_date: Release date in YYYY-MM-DD format (optional)
         archived: Set to True to archive the version (default: False)
     """
@@ -831,6 +834,8 @@ def jira_update_version(
         payload["name"] = name
     if description:
         payload["description"] = description
+    if start_date:
+        payload["startDate"] = start_date
     if release_date:
         payload["releaseDate"] = release_date
     if archived:
@@ -845,6 +850,7 @@ def jira_update_version(
         "name": result.get("name", ""),
         "released": result.get("released", False),
         "archived": result.get("archived", False),
+        "start_date": result.get("startDate", ""),
         "release_date": result.get("releaseDate", ""),
         "description": result.get("description", ""),
     }
