@@ -270,6 +270,10 @@ def _jira_put(path: str, payload: dict) -> dict:
     return _api_request(f"{JIRA_BASE}{path}", method="PUT", payload=payload)
 
 
+def _jira_delete(path: str) -> dict:
+    return _api_request(f"{JIRA_BASE}{path}", method="DELETE")
+
+
 def _agile_get(path: str) -> dict | list:
     return _api_request(f"{JIRA_AGILE_BASE}{path}")
 
@@ -703,6 +707,169 @@ def jira_component_summary() -> dict:
         for c in comps:
             counts[c["name"]] = counts.get(c["name"], 0) + 1
     return {"by_component": counts}
+
+
+@mcp.tool()
+def jira_create_version(
+    name: str,
+    description: str = "",
+    released: bool = False,
+) -> dict:
+    """Create a new version (fixVersion) in the configured project.
+
+    Args:
+        name: Version name, e.g. "1.21.0"
+        description: Optional version description
+        released: Whether the version is already released (default: False)
+    """
+    _check_config()
+    # Get the project numeric ID required by the versions API.
+    project_data = _jira_get(f"/project/{_quote_path(PROJECT)}")
+    project_id = project_data["id"]
+
+    payload: dict = {
+        "name": name,
+        "project": PROJECT,
+        "projectId": int(project_id),
+        "released": released,
+        "archived": False,
+    }
+    if description:
+        payload["description"] = description
+
+    result = _jira_post("/version", payload)
+    return {
+        "id": result.get("id", ""),
+        "name": result.get("name", ""),
+        "project": PROJECT,
+        "released": result.get("released", False),
+    }
+
+
+@mcp.tool()
+def jira_list_versions(
+    released: str = "all",
+    archived: bool = False,
+) -> list[dict]:
+    """List all versions in the configured project.
+
+    Args:
+        released: Filter by release status: "all", "released", or "unreleased" (default: "all")
+        archived: Include archived versions (default: False)
+    """
+    _check_config()
+    versions = _jira_get(f"/project/{_quote_path(PROJECT)}/versions")
+    results = []
+    for v in versions:
+        if not archived and v.get("archived", False):
+            continue
+        is_released = v.get("released", False)
+        if released == "released" and not is_released:
+            continue
+        if released == "unreleased" and is_released:
+            continue
+        results.append({
+            "id": v.get("id", ""),
+            "name": v.get("name", ""),
+            "released": is_released,
+            "archived": v.get("archived", False),
+            "release_date": v.get("releaseDate", ""),
+            "description": v.get("description", ""),
+        })
+    return results
+
+
+@mcp.tool()
+def jira_release_version(
+    version_id: str,
+    release_date: str = "",
+) -> dict:
+    """Mark a version as released.
+
+    Args:
+        version_id: Version ID (use jira_list_versions to find it)
+        release_date: Release date in YYYY-MM-DD format (defaults to today)
+    """
+    _check_config()
+    if not release_date:
+        import datetime
+        release_date = datetime.date.today().isoformat()
+
+    payload: dict = {
+        "released": True,
+        "releaseDate": release_date,
+    }
+    result = _jira_put(f"/version/{_quote_path(version_id)}", payload)
+    return {
+        "id": result.get("id", ""),
+        "name": result.get("name", ""),
+        "released": result.get("released", False),
+        "release_date": result.get("releaseDate", ""),
+    }
+
+
+@mcp.tool()
+def jira_update_version(
+    version_id: str,
+    name: str = "",
+    description: str = "",
+    release_date: str = "",
+    archived: bool = False,
+) -> dict:
+    """Update an existing version's metadata.
+
+    Args:
+        version_id: Version ID (use jira_list_versions to find it)
+        name: New version name (optional)
+        description: New description (optional)
+        release_date: Release date in YYYY-MM-DD format (optional)
+        archived: Set to True to archive the version (default: False)
+    """
+    _check_config()
+    payload: dict = {}
+    if name:
+        payload["name"] = name
+    if description:
+        payload["description"] = description
+    if release_date:
+        payload["releaseDate"] = release_date
+    if archived:
+        payload["archived"] = True
+
+    if not payload:
+        raise ValueError("No fields to update. Provide at least one field.")
+
+    result = _jira_put(f"/version/{_quote_path(version_id)}", payload)
+    return {
+        "id": result.get("id", ""),
+        "name": result.get("name", ""),
+        "released": result.get("released", False),
+        "archived": result.get("archived", False),
+        "release_date": result.get("releaseDate", ""),
+        "description": result.get("description", ""),
+    }
+
+
+@mcp.tool()
+def jira_delete_version(
+    version_id: str,
+    move_issues_to: str = "",
+) -> dict:
+    """Delete a version from the project.
+
+    Note: Some JIRA Server instances block DELETE on versions (405). If deletion
+    fails, use jira_update_version with archived=True as an alternative.
+
+    Args:
+        version_id: Version ID to delete (use jira_list_versions to find it)
+        move_issues_to: Version ID to reassign affected issues to (optional). If omitted, issues lose this fixVersion.
+    """
+    _check_config()
+    path = f"/version/{_quote_path(version_id)}"
+    if move_issues_to:
+        path += f"?moveFixIssuesTo={_quote_path(move_issues_to)}&moveAffectedIssuesTo={_quote_path(move_issues_to)}"
+    _jira_delete(path)
+    return {"deleted": version_id, "moved_issues_to": move_issues_to or "(none)"}
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
