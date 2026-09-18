@@ -1,6 +1,13 @@
 __pycache__/
 *.pyc
 .env
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local dev tooling — spec drafts, not project artifacts
+specs/
 
 # Lagune
 /.lagune/templates/
