@@ -168,6 +168,61 @@ Once installed, just talk naturally in your Kiro session:
 "How's the project status?"
 ```
 
+## Setting Custom & Instance-Specific Fields
+
+`jira_create` and `jira_update` support fields beyond the built-in ones (priority,
+assignee, labels, etc.) without falling back to the raw REST API.
+
+### Epic link
+
+```
+"Create a task 'Refactor auth' under epic PROJ-100"
+→ jira_create(summary="Refactor auth", epic_link="PROJ-100")
+
+"Move PROJ-1234 under epic PROJ-100"
+→ jira_update(ticket="PROJ-1234", epic_link="PROJ-100")
+```
+
+The instance's "Epic Link" custom field id is resolved by name at runtime and cached —
+nothing is hard-coded, so this works across instances. `jira_view` now returns an
+`epic_link` field so you can confirm the assignment. On team-managed / next-gen projects
+(which have no "Epic Link" field and use the native `parent` field instead), the tool
+raises a clear error explaining the alternative.
+
+### Story points
+
+```
+→ jira_create(summary="Add pagination", story_points=5)
+→ jira_update(ticket="PROJ-1234", story_points=8)
+```
+
+### Arbitrary custom fields
+
+For any other instance-specific field, pass a `custom_fields` map keyed by human field
+name (resolved at runtime) or by raw `customfield_*` id:
+
+```
+→ jira_create(summary="…", custom_fields={"Story Points": 5, "Team": {"value": "Platform"}})
+→ jira_update(ticket="PROJ-1234", custom_fields={"customfield_12345": "value"})
+```
+
+Notes:
+- **Value shape is passthrough.** Each value must match JIRA's expected write schema for
+  that field (e.g. epic link → bare key string; single-select → `{"value": "…"}`; number
+  fields → a number). The tool resolves the field *id* but does not reshape values.
+- **Typed parameters win.** If a field is set both by a named parameter (e.g. `priority`)
+  and via `custom_fields`, the named parameter takes precedence; the ignored key is
+  reported back in the result under `ignored_custom_fields`.
+- **Unknown field names fail loudly**, listing available field names, rather than silently
+  doing nothing.
+
+### Linking tickets
+
+`jira_link` defaults to the JIRA-standard link type `"Relates"`. If your instance names
+the type differently (some use `"Related"`), an unknown type no longer returns a raw HTTP
+404 — instead the tool lists the valid link-type names for your instance so you can retry
+with the correct one.
+
 ## Multi-Project Setup
 
 To manage multiple JIRA projects simultaneously, add multiple server entries in your `~/.kiro/settings/mcp.json`:
@@ -236,6 +291,28 @@ kiro-power-jira/
 | Server won't start | Run `uvx --from fastmcp fastmcp inspect server/jira_mcp.py` |
 | "Transition not available" | Use `jira_transitions` first to see available options |
 | Tools not showing in Kiro | Verify `installed.json` entry and restart Kiro |
+
+## Development / Testing
+
+The server ships with an offline test suite (no live JIRA instance or network required).
+Tests mock the HTTP layer at the `_api_request` seam, and the module skips `.env`
+bootstrap when `_JIRA_MCP_SKIP_ENV=1` is set (handled by the test fixtures).
+
+```bash
+# Create an isolated environment and install runtime + dev dependencies
+uv venv .venv
+uv pip install --python .venv fastmcp pytest pytest-cov
+
+# Run the suite
+.venv/bin/python -m pytest server/tests/ -q
+
+# With coverage for the server module
+.venv/bin/python -m pytest server/tests/ --cov=jira_mcp --cov-report=term-missing
+```
+
+The field-coverage features (`epic_link`, `story_points`, `custom_fields`, the
+`jira_link` unknown-type handling, and runtime field-id resolution) are fully covered.
+The lower overall percentage reflects pre-existing tools that predate the test suite.
 
 ## Contributing
 
