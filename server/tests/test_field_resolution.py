@@ -142,3 +142,32 @@ def test_empty_custom_fields_is_noop(jira, monkeypatch):
     # No custom fields added; catalog not fetched for an empty map.
     assert counter["field_calls"] == 0
     assert "customfield_10004" not in payload["fields"]
+
+
+def test_blank_custom_field_key_is_skipped(jira, monkeypatch):
+    """A blank/whitespace-only key must not abort the whole create with a
+    confusing 'Unknown field' error; it is skipped and reported as ignored."""
+    counter = _install_field_catalog(jira, monkeypatch)
+    result = jira.jira_create(
+        summary="hi", custom_fields={"": 1, "   ": 2, "Story Points": 5}
+    )
+    url, payload = counter["posts"][-1]
+    # The valid field still applied.
+    assert payload["fields"]["customfield_10004"] == 5
+    # Blank keys reported, not applied.
+    assert "" in result.get("ignored_custom_fields", [])
+
+
+def test_epic_link_and_custom_fields_same_id_collision(jira, monkeypatch):
+    """epic_link is applied first; a custom_fields entry targeting the SAME
+    resolved id must be reported as ignored, not silently overwrite it."""
+    counter = _install_field_catalog(jira, monkeypatch)
+    result = jira.jira_create(
+        summary="hi",
+        epic_link="TEST-100",
+        custom_fields={"Epic Link": "TEST-999"},
+    )
+    url, payload = counter["posts"][-1]
+    # epic_link wins.
+    assert payload["fields"]["customfield_10001"] == "TEST-100"
+    assert "Epic Link" in result.get("ignored_custom_fields", [])

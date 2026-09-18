@@ -7,8 +7,9 @@ def _make_recorder(jira, *, fail_on_post=False):
     """Build a fake _api_request that records calls and can simulate a bad type.
 
     Returns (calls, fn). ``calls`` is a list of (method, url, payload) tuples.
-    When ``fail_on_post`` is True, POSTs to /issueLink raise the 404 that JIRA
-    returns for an unknown link type; GETs to /issueLinkType return a catalog.
+    When ``fail_on_post`` is True, POSTs to /issueLink raise the structured 404
+    that JIRA returns for an unknown link type; GETs to /issueLinkType return a
+    catalog.
     """
     calls = []
 
@@ -25,9 +26,8 @@ def _make_recorder(jira, *, fail_on_post=False):
             }
         if url.endswith("/issueLink") and method == "POST":
             if fail_on_post:
-                raise RuntimeError(
-                    "JIRA API error (404): No issue link type with name "
-                    "'Relates' found."
+                raise jira.JiraApiError(
+                    "No issue link type with name 'Relates' found.", status=404
                 )
             return {}
         return {}
@@ -71,9 +71,9 @@ def test_link_unknown_type_when_catalog_lookup_also_fails(jira, monkeypatch):
     """If the issueLinkType lookup also fails, still raise a clear (if listless) error."""
     def fake(url, method="GET", payload=None):
         if url.endswith("/issueLinkType") and method == "GET":
-            raise RuntimeError("JIRA API error (500): boom")
+            raise jira.JiraApiError("boom", status=500)
         if url.endswith("/issueLink") and method == "POST":
-            raise RuntimeError("JIRA API error (404): unknown type")
+            raise jira.JiraApiError("unknown type", status=404)
         return {}
 
     monkeypatch.setattr(jira, "_api_request", fake)
@@ -88,7 +88,7 @@ def test_link_unknown_type_when_catalog_malformed(jira, monkeypatch):
         if url.endswith("/issueLinkType") and method == "GET":
             return []  # unexpected shape (list, not dict)
         if url.endswith("/issueLink") and method == "POST":
-            raise RuntimeError("JIRA API error (404): unknown type")
+            raise jira.JiraApiError("unknown type", status=404)
         return {}
 
     monkeypatch.setattr(jira, "_api_request", fake)
@@ -101,11 +101,30 @@ def test_link_unknown_type_does_not_swallow_other_errors(jira, monkeypatch):
     """A non-link-type failure (e.g. permission) must not be masked as a bad type."""
     def fake(url, method="GET", payload=None):
         if url.endswith("/issueLink") and method == "POST":
-            raise RuntimeError("JIRA API error (403): permission denied")
+            raise jira.JiraApiError("permission denied", status=403)
         return {}
 
     monkeypatch.setattr(jira, "_api_request", fake)
 
-    with pytest.raises(RuntimeError) as exc:
+    with pytest.raises(jira.JiraApiError) as exc:
         jira.jira_link("TEST-1", "TEST-2", link_type="Related")
-    assert "403" in str(exc.value)
+    assert exc.value.status == 403
+
+
+def test_link_does_not_misclassify_400_error_that_mentions_404(jira, monkeypatch):
+    """A non-404 error whose message text contains '404' (e.g. a ticket key) must
+    NOT be treated as an unknown link type."""
+    def fake(url, method="GET", payload=None):
+        if url.endswith("/issueLink") and method == "POST":
+            # e.g. a 400 whose message echoes a ticket like PROJ-404
+            raise jira.JiraApiError(
+                "Issue PROJ-404 does not exist", status=400
+            )
+        return {}
+
+    monkeypatch.setattr(jira, "_api_request", fake)
+
+    with pytest.raises(jira.JiraApiError) as exc:
+        jira.jira_link("TEST-1", "TEST-2", link_type="Related")
+    # Must surface the real 400, not a bogus "unknown link type" ValueError.
+    assert exc.value.status == 400

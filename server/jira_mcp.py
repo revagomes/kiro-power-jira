@@ -27,6 +27,20 @@ import urllib.request
 from fastmcp import FastMCP
 
 
+class JiraApiError(RuntimeError):
+    """A JIRA REST API error carrying the HTTP status code.
+
+    Subclasses RuntimeError so existing ``except RuntimeError`` handlers keep
+    working, while callers that need to branch on the status (e.g. detecting an
+    unknown link type via 404) can inspect ``.status`` precisely instead of
+    substring-matching the formatted message.
+    """
+
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status
+
+
 # ── Environment bootstrap ─────────────────────────────────────────────────────
 def _unquote(value: str) -> str:
     """Strip balanced surrounding quotes from a value (single or double)."""
@@ -241,21 +255,23 @@ def _api_request(
                 err.get("errors", {}).values()
             )
             if msgs:
-                raise RuntimeError(
-                    f"JIRA API error ({e.code}): {'; '.join(msgs)}"
+                raise JiraApiError(
+                    f"JIRA API error ({e.code}): {'; '.join(msgs)}",
+                    status=e.code,
                 ) from e
             # Structured response but no user-facing messages — generic error.
-            raise RuntimeError(
-                f"JIRA API error ({e.code}): request failed"
+            raise JiraApiError(
+                f"JIRA API error ({e.code}): request failed", status=e.code
             ) from e
         except (json.JSONDecodeError, AttributeError):
             # Do not leak raw response body — it may contain internal details.
-            raise RuntimeError(
+            raise JiraApiError(
                 f"JIRA API error ({e.code}): request failed "
-                f"(non-JSON response from server)"
+                f"(non-JSON response from server)",
+                status=e.code,
             ) from e
     except urllib.error.URLError as e:
-        raise RuntimeError(f"Connection failed: {e.reason}") from e
+        raise JiraApiError(f"Connection failed: {e.reason}", status=None) from e
 
 
 def _jira_get(path: str) -> dict | list:
@@ -377,12 +393,18 @@ def _apply_custom_fields(
     caller can report it rather than silently overwriting.
 
     Returns the list of custom-field keys that were ignored due to collision.
-    An empty/None map is a no-op and does not fetch the field catalog.
+    An empty/None map is a no-op and does not fetch the field catalog. Blank or
+    whitespace-only keys are skipped and reported in the ignored list.
     """
     if not custom_fields:
         return []
     ignored: list[str] = []
     for raw_key, value in custom_fields.items():
+        # Skip blank/whitespace-only keys rather than aborting the whole
+        # create/update with a confusing "Unknown field ''" error.
+        if not raw_key or not raw_key.strip():
+            ignored.append(raw_key)
+            continue
         field_id = _resolve_field_id(raw_key)
         if field_id in fields:
             ignored.append(raw_key)
@@ -824,11 +846,12 @@ def jira_link(ticket: str, target: str, link_type: str = "Relates") -> dict:
     }
     try:
         _jira_post("/issueLink", payload)
-    except RuntimeError as e:
-        # A 404 here means the instance has no link type with that name. Turn the
-        # raw error into an actionable one listing the valid names. Any other
-        # failure (permission, connectivity, etc.) is re-raised unchanged.
-        if "404" not in str(e):
+    except JiraApiError as e:
+        # A 404 means the instance has no link type with that name. Detect it via
+        # the structured status code (never a substring on the message, which
+        # could contain "404" for unrelated reasons such as a ticket key). Any
+        # other failure (permission, connectivity, etc.) is re-raised unchanged.
+        if e.status != 404:
             raise
         valid = _valid_link_type_names()
         listed = ", ".join(valid) if valid else "(none returned by the instance)"
