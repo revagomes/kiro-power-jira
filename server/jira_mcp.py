@@ -282,6 +282,165 @@ def _agile_post(path: str, payload: dict) -> dict:
     return _api_request(f"{JIRA_AGILE_BASE}{path}", method="POST", payload=payload)
 
 
+def _valid_link_type_names() -> list[str]:
+    """Return the list of issue-link type names defined on this instance.
+
+    Used to produce an actionable error when a caller supplies a link type the
+    instance does not recognise. Best-effort: on any failure, returns an empty
+    list rather than masking the original error.
+    """
+    try:
+        data = _jira_get("/issueLinkType")
+    except RuntimeError:
+        return []
+    if not isinstance(data, dict):
+        return []
+    return [
+        t["name"]
+        for t in data.get("issueLinkTypes", [])
+        if isinstance(t, dict) and t.get("name")
+    ]
+
+
+_RAW_CUSTOMFIELD_RE = re.compile(r"^customfield_\d+$")
+
+# Module-level cache of the instance's field catalog. Populated lazily on first
+# resolution and reused for the process lifetime (field ids are stable at
+# runtime). Stored as a tuple of (lookup_map, display_names):
+#   lookup_map:  lower-cased field name → field id (case-insensitive exact match)
+#   display_names: original field names, preserved for actionable error messages
+_FIELD_CACHE: tuple[dict[str, str], list[str]] | None = None
+
+
+def _reset_field_cache() -> None:
+    """Clear the cached field catalog. Primarily for tests."""
+    global _FIELD_CACHE
+    _FIELD_CACHE = None
+
+
+def _load_field_catalog() -> tuple[dict[str, str], list[str]]:
+    """Fetch and cache the instance field catalog.
+
+    Returns (lookup_map, display_names). Never caches a failure: if the API
+    call raises, the cache stays empty so a subsequent call retries rather than
+    serving a poisoned negative result.
+    """
+    global _FIELD_CACHE
+    if _FIELD_CACHE is not None:
+        return _FIELD_CACHE
+    data = _jira_get("/field")  # may raise; intentionally not cached on failure
+    lookup: dict[str, str] = {}
+    names: list[str] = []
+    if isinstance(data, list):
+        for f in data:
+            if isinstance(f, dict) and f.get("name") and f.get("id"):
+                name = f["name"].strip()
+                lookup[name.lower()] = f["id"]
+                names.append(name)
+    _FIELD_CACHE = (lookup, names)
+    return _FIELD_CACHE
+
+
+def _resolve_field_id(name_or_id: str) -> str:
+    """Resolve a human field name (or raw customfield_* id) to a field id.
+
+    - A value already matching ``customfield_\\d+`` is returned unchanged and
+      does not trigger a catalog fetch.
+    - Names are matched case-insensitively but exactly (no fuzzy/substring), so
+      "Epic Link" never collides with "Epic Link Status".
+    - An unresolved name raises ValueError listing available field names to help
+      the caller correct a typo.
+    """
+    candidate = name_or_id.strip()
+    if _RAW_CUSTOMFIELD_RE.match(candidate):
+        return candidate
+    lookup, names = _load_field_catalog()
+    key = candidate.lower()
+    if key in lookup:
+        return lookup[key]
+    available = sorted(names, key=str.lower)
+    raise ValueError(
+        f"Unknown field '{name_or_id}'. Could not resolve it to a field id on "
+        f"this JIRA instance. Available field names include: "
+        f"{', '.join(available[:40])}"
+        + (" …" if len(available) > 40 else "")
+    )
+
+
+def _apply_custom_fields(
+    fields: dict, custom_fields: dict | None
+) -> list[str]:
+    """Merge a custom_fields map into ``fields``, resolving names to ids.
+
+    Typed parameters already present in ``fields`` take precedence: a colliding
+    custom field is skipped and its key returned in the ignored list so the
+    caller can report it rather than silently overwriting.
+
+    Returns the list of custom-field keys that were ignored due to collision.
+    An empty/None map is a no-op and does not fetch the field catalog.
+    """
+    if not custom_fields:
+        return []
+    ignored: list[str] = []
+    for raw_key, value in custom_fields.items():
+        field_id = _resolve_field_id(raw_key)
+        if field_id in fields:
+            ignored.append(raw_key)
+            continue
+        fields[field_id] = value
+    return ignored
+
+
+def _apply_epic_link(fields: dict, epic_link: str) -> None:
+    """Resolve the instance's "Epic Link" field and set it in ``fields``.
+
+    Raises a clear ValueError if the instance has no "Epic Link" field (e.g.
+    team-managed / next-gen projects, which use the native ``parent`` field
+    instead) rather than silently doing nothing.
+    """
+    if not epic_link:
+        return
+    try:
+        field_id = _resolve_field_id("Epic Link")
+    except ValueError as e:
+        raise ValueError(
+            "Cannot set epic_link: this JIRA instance has no 'Epic Link' field. "
+            "Team-managed/next-gen projects use the native 'parent' field instead "
+            "— set it via custom_fields={'parent': {'key': '<EPIC-KEY>'}}."
+        ) from e
+    fields[field_id] = epic_link
+
+
+def _apply_story_points(fields: dict, story_points: float | None) -> None:
+    """Resolve the instance's "Story Points" field and set it in ``fields``.
+
+    ``None`` means "not provided" and is a no-op; ``0`` is a valid value and is
+    applied. Raises a clear ValueError if the instance has no such field.
+    """
+    if story_points is None:
+        return
+    try:
+        field_id = _resolve_field_id("Story Points")
+    except ValueError as e:
+        raise ValueError(
+            "Cannot set story_points: this JIRA instance has no 'Story Points' "
+            "field. Set the correct field via custom_fields instead."
+        ) from e
+    fields[field_id] = story_points
+
+
+def _epic_link_field_id_or_none() -> str | None:
+    """Best-effort resolution of the Epic Link field id for read paths.
+
+    Returns None (instead of raising) when the instance has no Epic Link field
+    or the catalog cannot be loaded, so read operations degrade gracefully.
+    """
+    try:
+        return _resolve_field_id("Epic Link")
+    except (ValueError, RuntimeError):
+        return None
+
+
 def _fetch_issues(
     jql: str, fields: str = FIELDS_LIST, max_results: int = 50
 ) -> list:
@@ -319,8 +478,18 @@ def jira_view(ticket: str) -> dict:
     Args:
         ticket: Ticket key, e.g. PROJ-1234
     """
-    data = _jira_get(f"/issue/{_validate_key(ticket)}?fields={FIELDS_FULL}")
+    key = _validate_key(ticket)
+    # Resolve the instance-specific Epic Link field id (best-effort) so we can
+    # request and surface it for read-back. Degrades gracefully if absent.
+    epic_field_id = _epic_link_field_id_or_none()
+    requested_fields = FIELDS_FULL
+    if epic_field_id:
+        requested_fields = f"{FIELDS_FULL},{epic_field_id}"
+    data = _jira_get(f"/issue/{key}?fields={requested_fields}")
     f = data["fields"]
+    epic_link = ""
+    if epic_field_id:
+        epic_link = f.get(epic_field_id) or ""
     result = {
         "key": data["key"],
         "url": f"{JIRA_BROWSE}/{data['key']}",
@@ -333,6 +502,7 @@ def jira_view(ticket: str) -> dict:
         "assignee": (f.get("assignee") or {}).get("displayName", "Unassigned"),
         "created": f.get("created", "")[:10],
         "updated": f.get("updated", "")[:10],
+        "epic_link": epic_link,
         "labels": f.get("labels", []),
         "components": [c["name"] for c in f.get("components", [])],
         "fix_versions": [v["name"] for v in f.get("fixVersions", [])],
@@ -450,6 +620,9 @@ def jira_create(
     component: str = "",
     labels: str = "",
     fix_version: str = "",
+    epic_link: str = "",
+    story_points: float | None = None,
+    custom_fields: dict | None = None,
 ) -> dict:
     """Create a new JIRA ticket in the configured project.
 
@@ -462,6 +635,14 @@ def jira_create(
         component: Component name (optional)
         labels: Comma-separated labels (optional)
         fix_version: Fix version name (optional)
+        epic_link: Epic ticket key to link this issue under, e.g. PROJ-100 (optional).
+            Resolves the instance's "Epic Link" field at runtime.
+        story_points: Story points estimate (optional). Resolves the instance's
+            "Story Points" field at runtime.
+        custom_fields: Optional map of {field name or customfield_* id: value} for
+            any instance-specific field (e.g. {"Story Points": 5}). Field names are
+            resolved to ids at runtime. Values must match JIRA's expected write shape
+            for that field. Typed parameters above take precedence on collision.
     """
     fields: dict = {
         "project": {"key": PROJECT},
@@ -481,9 +662,16 @@ def jira_create(
     if fix_version:
         fields["fixVersions"] = [{"name": fix_version}]
 
+    _apply_epic_link(fields, epic_link)
+    _apply_story_points(fields, story_points)
+    ignored = _apply_custom_fields(fields, custom_fields)
+
     result = _jira_post("/issue", {"fields": fields})
     key = result.get("key", "unknown")
-    return {"key": key, "url": f"{JIRA_BROWSE}/{key}"}
+    out: dict = {"key": key, "url": f"{JIRA_BROWSE}/{key}"}
+    if ignored:
+        out["ignored_custom_fields"] = ignored
+    return out
 
 
 @mcp.tool()
@@ -496,6 +684,9 @@ def jira_update(
     component: str = "",
     labels: str = "",
     fix_version: str = "",
+    epic_link: str = "",
+    story_points: float | None = None,
+    custom_fields: dict | None = None,
 ) -> dict:
     """Update fields on an existing JIRA ticket.
 
@@ -508,6 +699,14 @@ def jira_update(
         component: Component name (optional)
         labels: Comma-separated labels - replaces existing (optional)
         fix_version: Fix version name (optional)
+        epic_link: Epic ticket key to link this issue under, e.g. PROJ-100 (optional).
+            Resolves the instance's "Epic Link" field at runtime.
+        story_points: Story points estimate (optional). Resolves the instance's
+            "Story Points" field at runtime.
+        custom_fields: Optional map of {field name or customfield_* id: value} for
+            any instance-specific field (e.g. {"Story Points": 8}). Field names are
+            resolved to ids at runtime. Values must match JIRA's expected write shape
+            for that field. Typed parameters above take precedence on collision.
     """
     fields: dict = {}
     if summary:
@@ -525,11 +724,19 @@ def jira_update(
     if fix_version:
         fields["fixVersions"] = [{"name": fix_version}]
 
+    _apply_epic_link(fields, epic_link)
+    _apply_story_points(fields, story_points)
+    ignored = _apply_custom_fields(fields, custom_fields)
+
     if not fields:
         raise ValueError("No fields to update. Provide at least one field.")
 
-    _jira_put(f"/issue/{_validate_key(ticket)}", {"fields": fields})
-    return {"ticket": _validate_key(ticket), "updated_fields": list(fields.keys())}
+    key = _validate_key(ticket)
+    _jira_put(f"/issue/{key}", {"fields": fields})
+    out: dict = {"ticket": key, "updated_fields": list(fields.keys())}
+    if ignored:
+        out["ignored_custom_fields"] = ignored
+    return out
 
 
 @mcp.tool()
@@ -598,17 +805,38 @@ def jira_comment(ticket: str, body: str) -> dict:
 def jira_link(ticket: str, target: str, link_type: str = "Relates") -> dict:
     """Link two JIRA tickets together.
 
+    The default link type is the JIRA-standard "Relates". Some instances name
+    this link type differently (e.g. "Related"). If the given type is not known
+    to the instance, this raises a ValueError listing the valid type names for
+    that instance instead of surfacing a raw HTTP 404.
+
     Args:
         ticket: Source ticket key
         target: Target ticket key
         link_type: Link type name (Relates, Blocks, Clones, Duplicate, etc.)
     """
-    _jira_post("/issueLink", {
+    src = _validate_key(ticket)
+    dst = _validate_key(target)
+    payload = {
         "type": {"name": link_type},
-        "inwardIssue": {"key": _validate_key(ticket)},
-        "outwardIssue": {"key": _validate_key(target)},
-    })
-    return {"linked": f"{_validate_key(ticket)} --[{link_type}]--> {_validate_key(target)}"}
+        "inwardIssue": {"key": src},
+        "outwardIssue": {"key": dst},
+    }
+    try:
+        _jira_post("/issueLink", payload)
+    except RuntimeError as e:
+        # A 404 here means the instance has no link type with that name. Turn the
+        # raw error into an actionable one listing the valid names. Any other
+        # failure (permission, connectivity, etc.) is re-raised unchanged.
+        if "404" not in str(e):
+            raise
+        valid = _valid_link_type_names()
+        listed = ", ".join(valid) if valid else "(none returned by the instance)"
+        raise ValueError(
+            f"Unknown link type '{link_type}' for this JIRA instance. "
+            f"Valid link types: {listed}."
+        ) from e
+    return {"linked": f"{src} --[{link_type}]--> {dst}"}
 
 
 @mcp.tool()
