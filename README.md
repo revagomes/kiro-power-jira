@@ -9,33 +9,42 @@ Works with **any JIRA instance** (Cloud or Server) and **any project** — fully
 
 ## What It Does
 
-This power exposes 16 MCP tools for interacting with the JIRA REST API v2:
+This power exposes 24 MCP tools for interacting with the JIRA REST API v2:
 
-- **Query:** View tickets, search with JQL, list your open work, browse backlog/sprint
-- **Mutate:** Create tickets, update fields, transition status, add comments, link tickets
-- **Board/Sprint:** List boards and sprints, move tickets between sprints
+- **Query:** View tickets, search with JQL, list your open/recent work, browse backlog/sprint
+- **Mutate:** Create tickets, update fields (including epic link, story points, and arbitrary custom fields), transition status, add comments, link tickets
+- **Board/Sprint:** List boards and sprints, list sprint issues, move tickets between sprints
+- **Versions:** Create, list, update, release, and delete project versions (fixVersions)
 - **Report:** Status and component summaries
 
 ## Available Tools
 
 | Tool | Purpose |
 |------|---------|
-| `jira_view` | View a ticket with full details (description, comments, links) |
+| `jira_view` | View a ticket with full details (description, comments, links, epic link) |
 | `jira_search` | Search tickets using JQL |
 | `jira_my_open` | List your currently open tickets |
 | `jira_backlog` | List project backlog by priority |
+| `jira_my_recent` | List your recently updated tickets |
+| `jira_my_summary` | Summary of your assigned tickets grouped by status |
 | `jira_sprint` | List current sprint tickets |
-| `jira_create` | Create a new ticket |
-| `jira_update` | Update ticket fields (priority, assignee, labels, etc.) |
+| `jira_create` | Create a new ticket (supports epic link, story points, custom fields) |
+| `jira_update` | Update ticket fields (priority, assignee, labels, epic link, story points, custom fields) |
 | `jira_transitions` | List available status transitions for a ticket |
 | `jira_transition` | Move a ticket to a new status |
 | `jira_comment` | Add a comment to a ticket |
 | `jira_link` | Link two tickets together |
 | `jira_boards` | List project Scrum/Kanban boards |
 | `jira_sprints` | List active/future sprints for a board |
+| `jira_sprint_issues` | List issues in a specific sprint |
 | `jira_move_to_sprint` | Move a ticket into a sprint |
 | `jira_status_summary` | Count open issues grouped by status |
 | `jira_component_summary` | Count open issues grouped by component |
+| `jira_create_version` | Create a new project version (fixVersion) |
+| `jira_list_versions` | List project versions |
+| `jira_release_version` | Mark a version as released |
+| `jira_update_version` | Update a version's metadata |
+| `jira_delete_version` | Delete (or archive) a version |
 
 ## Requirements
 
@@ -149,7 +158,7 @@ export JIRA_PAT="test" JIRA_BASE_URL="https://jira.example.com" JIRA_PROJECT="TE
 uvx --from fastmcp fastmcp inspect /path/to/kiro-power-jira/server/jira_mcp.py
 ```
 
-Expected output: `Tools: 16`
+Expected output: `Tools: 24`
 
 Then restart Kiro — the power should appear in the powers list.
 
