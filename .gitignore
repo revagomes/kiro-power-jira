@@ -17,3 +17,7 @@ specs/
 /.lagune/skills/*
 /**/lagune.*
 /**/lagune/
+
+# Lagune audit records — security findings/plans, keep out of public repo
+/.lagune/memory/
+/.lagune/tracking.json
