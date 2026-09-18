@@ -50,22 +50,30 @@ If any required variable is missing, the server returns an actionable error mess
 
 | Tool | Purpose |
 |------|---------|
-| `jira_view` | View a ticket with full details (description, comments, links) |
+| `jira_view` | View a ticket with full details (description, comments, links, epic link) |
 | `jira_search` | Search tickets using JQL |
 | `jira_my_open` | List your currently open tickets |
 | `jira_backlog` | List project backlog by priority |
+| `jira_my_recent` | List your recently updated tickets |
+| `jira_my_summary` | Summary of your assigned tickets grouped by status |
 | `jira_sprint` | List current sprint tickets |
-| `jira_create` | Create a new ticket |
-| `jira_update` | Update ticket fields (priority, assignee, labels, etc.) |
+| `jira_create` | Create a new ticket (supports epic link, story points, custom fields) |
+| `jira_update` | Update ticket fields (priority, assignee, labels, epic link, story points, custom fields) |
 | `jira_transitions` | List available status transitions for a ticket |
 | `jira_transition` | Move a ticket to a new status |
 | `jira_comment` | Add a comment to a ticket |
 | `jira_link` | Link two tickets together |
 | `jira_boards` | List project Scrum/Kanban boards |
 | `jira_sprints` | List active/future sprints for a board |
+| `jira_sprint_issues` | List issues in a specific sprint |
 | `jira_move_to_sprint` | Move a ticket into a sprint |
 | `jira_status_summary` | Count open issues grouped by status |
 | `jira_component_summary` | Count open issues grouped by component |
+| `jira_create_version` | Create a new project version (fixVersion) |
+| `jira_list_versions` | List project versions |
+| `jira_release_version` | Mark a version as released |
+| `jira_update_version` | Update a version's metadata |
+| `jira_delete_version` | Delete (or archive) a version |
 
 ## Activation Keywords
 
@@ -109,6 +117,12 @@ User: "I'm starting work on PROJ-1234"
 
 User: "Create a bug for the broken pagination"
 → Call `jira_create(summary="Pagination broken on search results", issue_type="Bug", priority="P2")`
+
+### Create a ticket under an epic
+
+User: "Create a task 'Refactor auth' under epic PROJ-100"
+→ Call `jira_create(summary="Refactor auth", epic_link="PROJ-100")`
+The "Epic Link" field id is resolved by name at runtime, so no instance-specific id is hardcoded. Use `story_points=` for estimates, or `custom_fields={"<name or id>": value}` for any other instance-specific field.
 
 ### Post MR link as comment
 
