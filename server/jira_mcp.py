@@ -286,21 +286,23 @@ def _api_request(
             # a proxy in front of JIRA rather than real API data.
             ctype = resp.headers.get("Content-Type", "")
             if "json" not in ctype.lower():
-                raise RuntimeError(
+                raise JiraApiError(
                     f"Expected JSON from JIRA but received "
                     f"'{ctype or 'unknown content type'}' from {resp.geturl()}. "
                     f"The instance may be behind an SSO/login page; Personal "
-                    f"Access Token auth may not be honored for this deployment."
+                    f"Access Token auth may not be honored for this deployment.",
+                    status=None,
                 )
             try:
                 return json.loads(body)
             except json.JSONDecodeError as e:
-                raise RuntimeError(
+                raise JiraApiError(
                     f"JIRA returned a non-JSON response from {resp.geturl()} "
-                    f"(likely an SSO/HTML login page rather than API data)."
+                    f"(likely an SSO/HTML login page rather than API data).",
+                    status=None,
                 ) from e
     except _SSORedirectError as e:
-        raise RuntimeError(str(e)) from e
+        raise JiraApiError(str(e), status=None) from e
     except urllib.error.HTTPError as e:
         body = e.read().decode() if e.fp else ""
         try:
