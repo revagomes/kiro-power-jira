@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-09-21
+
+### Fixed
+- JIRA instances behind an interactive SSO gateway (EU Login/ECAS, Okta,
+  SiteMinder, etc.) now fail with a clear, actionable error instead of a raw
+  `Expecting value: line 1 column 1 (char 0)` JSON parse error. `_api_request`
+  refuses cross-host redirects, validates the response `Content-Type`, and
+  guards `json.loads` so a login/HTML page served in front of JIRA is reported
+  as such.
+
+### Changed
+- SSO/content-type failure paths now raise `JiraApiError` (with `status=None`)
+  instead of a bare `RuntimeError`, keeping the API error contract uniform with
+  the rest of `_api_request`.
+
+### Tests
+- Added offline regression tests for SSO redirect and content-type handling
+  (cross-host redirect blocked, same-host redirect allowed, non-JSON body
+  rejected, valid JSON still parsed).
+
 ## [0.4.0] - 2026-09-16
 
 ### Added
@@ -63,6 +83,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   operations over the REST API v2, configured entirely via environment
   variables.
 
+[0.4.1]: https://github.com/revagomes/kiro-power-jira/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/revagomes/kiro-power-jira/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/revagomes/kiro-power-jira/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/revagomes/kiro-power-jira/compare/v0.1.0...v0.2.0
