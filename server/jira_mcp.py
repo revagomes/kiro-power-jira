@@ -224,6 +224,38 @@ def _quote_path(value: str) -> str:
     return urllib.parse.quote(value, safe="")
 
 
+# ── HTTP: block cross-host redirects (SSO gateway detection) ──────────────────
+class _SSORedirectError(Exception):
+    """Raised when an API request is redirected to a different host.
+
+    Instances behind an interactive SSO reverse proxy (EU Login/ECAS, Okta,
+    SiteMinder, etc.) answer API calls with a 30x to a login host. urllib
+    would silently follow it to an HTML page, producing a confusing JSON parse
+    error downstream. We stop at the first cross-host hop and carry an
+    actionable message.
+    """
+
+
+class _NoCrossHostRedirect(urllib.request.HTTPRedirectHandler):
+    """Redirect handler that refuses to follow redirects leaving the origin host."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        old_host = urllib.parse.urlparse(req.full_url).netloc
+        new_host = urllib.parse.urlparse(newurl).netloc
+        if new_host and new_host != old_host:
+            raise _SSORedirectError(
+                f"Request to JIRA was redirected to a different host "
+                f"('{new_host}'). This instance appears to be behind an "
+                f"interactive SSO gateway that does not honor Personal Access "
+                f"Token auth. PAT-only access is not supported for this "
+                f"deployment."
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_OPENER = urllib.request.build_opener(_NoCrossHostRedirect())
+
+
 def _api_request(
     url: str, method: str = "GET", payload: dict | None = None
 ) -> dict | list:
@@ -241,11 +273,34 @@ def _api_request(
         # unreachable.  Adequate for all normal API calls including search
         # pagination.  Not currently configurable — revisit if deployments
         # with known-slow instances need a longer window.
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        #
+        # Uses a custom opener that refuses cross-host redirects so an SSO
+        # gateway bouncing us to a login host surfaces as a clear error
+        # instead of a downstream JSON parse failure.
+        with _OPENER.open(req, timeout=30) as resp:
             body = resp.read()
             if not body:
                 return {}
-            return json.loads(body)
+            # A JIRA API endpoint returns JSON.  If we got HTML (or anything
+            # else), we were almost certainly served a login/redirect page by
+            # a proxy in front of JIRA rather than real API data.
+            ctype = resp.headers.get("Content-Type", "")
+            if "json" not in ctype.lower():
+                raise RuntimeError(
+                    f"Expected JSON from JIRA but received "
+                    f"'{ctype or 'unknown content type'}' from {resp.geturl()}. "
+                    f"The instance may be behind an SSO/login page; Personal "
+                    f"Access Token auth may not be honored for this deployment."
+                )
+            try:
+                return json.loads(body)
+            except json.JSONDecodeError as e:
+                raise RuntimeError(
+                    f"JIRA returned a non-JSON response from {resp.geturl()} "
+                    f"(likely an SSO/HTML login page rather than API data)."
+                ) from e
+    except _SSORedirectError as e:
+        raise RuntimeError(str(e)) from e
     except urllib.error.HTTPError as e:
         body = e.read().decode() if e.fp else ""
         try:
