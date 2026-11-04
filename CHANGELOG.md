@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-11-04
+
+### Added
+- `jira_change_issue_type` tool: change an existing ticket's issue type (e.g.
+  Task → Bug) via `PUT /issue/{key}`. Invalid target types return a clear error
+  listing the project's valid issue types instead of a raw HTTP 400 (mirroring
+  `jira_link`'s unknown-link-type handling), and the new type is read back from
+  JIRA and returned. Same-level retypes are applied directly; standard↔sub-task
+  conversions are reported as requiring JIRA's Move wizard.
+
+### Tests
+- Offline tests for `jira_change_issue_type`: happy path and payload shape,
+  invalid-type error listing valid types, permission (403) not masked as a bad
+  type, key/empty-type validation, catalog-lookup failure and malformed-catalog
+  degradation, and read-back-failure fallback.
+
+### Documentation
+- README and POWER tool tables updated to 25 tools; added a "Changing an
+  issue's type" usage section.
+
 ## [0.4.1] - 2026-09-21
 
 ### Fixed
@@ -83,6 +103,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   operations over the REST API v2, configured entirely via environment
   variables.
 
+[0.5.0]: https://github.com/revagomes/kiro-power-jira/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/revagomes/kiro-power-jira/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/revagomes/kiro-power-jira/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/revagomes/kiro-power-jira/compare/v0.2.0...v0.3.0

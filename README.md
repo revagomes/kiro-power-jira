@@ -9,7 +9,7 @@ Works with **any JIRA instance** (Cloud or Server) and **any project** — fully
 
 ## What It Does
 
-This power exposes 24 MCP tools for interacting with the JIRA REST API v2:
+This power exposes 25 MCP tools for interacting with the JIRA REST API v2:
 
 - **Query:** View tickets, search with JQL, list your open/recent work, browse backlog/sprint
 - **Mutate:** Create tickets, update fields (including epic link, story points, and arbitrary custom fields), transition status, add comments, link tickets
@@ -32,6 +32,7 @@ This power exposes 24 MCP tools for interacting with the JIRA REST API v2:
 | `jira_update` | Update ticket fields (priority, assignee, labels, epic link, story points, custom fields) |
 | `jira_transitions` | List available status transitions for a ticket |
 | `jira_transition` | Move a ticket to a new status |
+| `jira_change_issue_type` | Change a ticket's issue type (e.g. Task → Bug) |
 | `jira_comment` | Add a comment to a ticket |
 | `jira_link` | Link two tickets together |
 | `jira_boards` | List project Scrum/Kanban boards |
@@ -231,6 +232,20 @@ Notes:
 the type differently (some use `"Related"`), an unknown type no longer returns a raw HTTP
 404 — instead the tool lists the valid link-type names for your instance so you can retry
 with the correct one.
+
+### Changing an issue's type
+
+`jira_change_issue_type` retypes an existing ticket (e.g. a runtime fatal filed as a
+`Task` that should be a `Bug`):
+
+```text
+→ jira_change_issue_type(ticket="PROJ-1234", issue_type="Bug")
+```
+
+A same-level change (Task ↔ Bug ↔ Story ↔ Improvement) is applied directly. If the target
+type is not valid for the project — or the change crosses the standard/sub-task boundary,
+which JIRA only allows through its Move wizard — the tool lists the project's valid issue
+types instead of surfacing a raw HTTP 400. The new type is read back from JIRA and returned.
 
 ## Multi-Project Setup
 

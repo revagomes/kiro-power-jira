@@ -61,6 +61,7 @@ If any required variable is missing, the server returns an actionable error mess
 | `jira_update` | Update ticket fields (priority, assignee, labels, epic link, story points, custom fields) |
 | `jira_transitions` | List available status transitions for a ticket |
 | `jira_transition` | Move a ticket to a new status |
+| `jira_change_issue_type` | Change a ticket's issue type (e.g. Task → Bug) |
 | `jira_comment` | Add a comment to a ticket |
 | `jira_link` | Link two tickets together |
 | `jira_boards` | List project Scrum/Kanban boards |

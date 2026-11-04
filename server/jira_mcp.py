@@ -355,6 +355,28 @@ def _agile_post(path: str, payload: dict) -> dict:
     return _api_request(f"{JIRA_AGILE_BASE}{path}", method="POST", payload=payload)
 
 
+def _valid_issue_type_names() -> list[str]:
+    """Return the issue-type names defined on the configured project.
+
+    Used to produce an actionable error when a caller supplies an issue type
+    the project does not offer. Best-effort: on any failure, returns an empty
+    list rather than masking the original error. Sub-task types are included —
+    JIRA treats a Task<->Sub-task change as a Move, which the caller may still
+    want to know is valid for the project.
+    """
+    try:
+        data = _jira_get(f"/project/{_quote_path(PROJECT)}")
+    except RuntimeError:
+        return []
+    if not isinstance(data, dict):
+        return []
+    return [
+        t["name"]
+        for t in data.get("issueTypes", [])
+        if isinstance(t, dict) and t.get("name")
+    ]
+
+
 def _valid_link_type_names() -> list[str]:
     """Return the list of issue-link type names defined on this instance.
 
@@ -917,6 +939,64 @@ def jira_link(ticket: str, target: str, link_type: str = "Relates") -> dict:
             f"Valid link types: {listed}."
         ) from e
     return {"linked": f"{src} --[{link_type}]--> {dst}"}
+
+
+@mcp.tool()
+def jira_change_issue_type(ticket: str, issue_type: str) -> dict:
+    """Change an existing ticket's issue type (e.g. Task -> Bug).
+
+    Updates the issue's type via ``PUT /issue/{key}`` with an ``issuetype``
+    field. If the target type is not valid for the issue (JIRA rejects the
+    change with an HTTP 400 — e.g. the type is not in the project's issue-type
+    scheme, a required-field screen blocks it, or the change crosses the
+    standard/sub-task boundary which only the Move wizard can do), this raises
+    a ValueError listing the project's valid issue types instead of surfacing a
+    raw HTTP error. Any other failure (permission, connectivity, etc.) is
+    re-raised unchanged.
+
+    Note: a same-level type change (e.g. Task -> Bug) is supported directly.
+    Converting between a standard type and a sub-task changes the issue's
+    hierarchy level and must be done through JIRA's Move wizard in the UI.
+
+    Args:
+        ticket: Ticket key, e.g. PROJ-1234
+        issue_type: Target issue type name, e.g. Bug, Task, Story, Improvement
+    """
+    key = _validate_key(ticket)
+    target = issue_type.strip()
+    if not target:
+        raise ValueError(
+            "issue_type must be a non-empty issue type name (e.g. 'Bug')."
+        )
+    try:
+        _jira_put(f"/issue/{key}", {"fields": {"issuetype": {"name": target}}})
+    except JiraApiError as e:
+        # A 400 means JIRA rejected the type for this issue/screen. Mirror
+        # jira_link: detect via the structured status code (never a substring
+        # on the message) and surface the project's valid types. Any other
+        # status (permission, connectivity, not found) is re-raised unchanged.
+        if e.status != 400:
+            raise
+        valid = _valid_issue_type_names()
+        listed = ", ".join(valid) if valid else "(none returned by the instance)"
+        raise ValueError(
+            f"Cannot change {key} to issue type '{target}'. It is not a "
+            f"valid type for this project, a required-field screen blocks it, "
+            f"or the change crosses the standard/sub-task boundary (which "
+            f"requires JIRA's Move wizard). "
+            f"Valid issue types for {PROJECT}: {listed}."
+        ) from e
+
+    # Read back the type so the caller sees the authoritative post-change value
+    # rather than echoing the requested name.
+    try:
+        data = _jira_get(f"/issue/{key}?fields=issuetype")
+        new_type = ((data.get("fields") or {}).get("issuetype") or {}).get(
+            "name", target
+        )
+    except RuntimeError:
+        new_type = target
+    return {"ticket": key, "issue_type": new_type}
 
 
 @mcp.tool()
