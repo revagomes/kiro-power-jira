@@ -902,6 +902,109 @@ def jira_comment(ticket: str, body: str) -> dict:
     }
 
 
+_COMMENT_ID_RE = re.compile(r"^\d+$")
+
+
+def _validate_web_url(url: str) -> str:
+    """Validate a web link URL: http(s) with a host, no control characters.
+
+    Rejects other schemes (javascript:, file:, ftp:, ...) so a link added to a
+    ticket can never execute script or point at a local file when clicked.
+    """
+    candidate = url.strip()
+    if any(ord(c) < 32 or ord(c) == 127 for c in candidate):
+        raise ValueError("Invalid URL: contains control characters.")
+    parsed = urllib.parse.urlparse(candidate)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError(
+            f"Invalid URL: '{url}'. Expected an absolute http(s) URL."
+        )
+    return candidate
+
+
+def _remote_links(ticket_key: str) -> list[dict]:
+    """Return the raw remote links of a ticket (empty list when none)."""
+    links = _jira_get(f"/issue/{ticket_key}/remotelink")
+    return links if isinstance(links, list) else []
+
+
+@mcp.tool()
+def jira_web_link(ticket: str, url: str, title: str = "", summary: str = "") -> dict:
+    """Add a web (remote) link to a JIRA ticket, e.g. a merge request URL.
+
+    Shown in the ticket's "Web Links" panel, unlike a comment. Idempotent: if
+    the ticket already has a web link with the same URL, nothing is created and
+    the existing link is returned with created=False.
+
+    Args:
+        ticket: Ticket key, e.g. PROJ-1234
+        url: Absolute http(s) URL to link to
+        title: Link title shown in JIRA (defaults to the URL)
+        summary: Optional short description shown under the title
+    """
+    key = _validate_key(ticket)
+    link_url = _validate_web_url(url)
+    for link in _remote_links(key):
+        obj = link.get("object") or {}
+        if obj.get("url") == link_url:
+            return {
+                "ticket": key,
+                "link_id": str(link.get("id", "")),
+                "url": link_url,
+                "title": obj.get("title", ""),
+                "created": False,
+            }
+    link_title = title.strip() or link_url
+    obj = {"url": link_url, "title": link_title}
+    if summary.strip():
+        obj["summary"] = summary.strip()
+    result = _jira_post(f"/issue/{key}/remotelink", {"object": obj})
+    return {
+        "ticket": key,
+        "link_id": str(result.get("id", "")),
+        "url": link_url,
+        "title": link_title,
+        "created": True,
+    }
+
+
+@mcp.tool()
+def jira_web_links(ticket: str) -> list[dict]:
+    """List the web (remote) links of a JIRA ticket.
+
+    Args:
+        ticket: Ticket key, e.g. PROJ-1234
+    """
+    key = _validate_key(ticket)
+    return [
+        {
+            "link_id": str(link.get("id", "")),
+            "url": (link.get("object") or {}).get("url", ""),
+            "title": (link.get("object") or {}).get("title", ""),
+        }
+        for link in _remote_links(key)
+    ]
+
+
+@mcp.tool()
+def jira_delete_comment(ticket: str, comment_id: str) -> dict:
+    """Delete a comment from a JIRA ticket (irreversible).
+
+    Use the comment_id returned by jira_comment. Only the comment's author or a
+    project admin can delete it; JIRA answers 403 otherwise.
+
+    Args:
+        ticket: Ticket key, e.g. PROJ-1234
+        comment_id: Numeric comment id
+    """
+    key = _validate_key(ticket)
+    cid = str(comment_id).strip()
+    if not _COMMENT_ID_RE.match(cid):
+        raise ValueError(f"Invalid comment id: '{comment_id}'. Expected digits only.")
+    _jira_delete(f"/issue/{key}/comment/{cid}")
+    return {"ticket": key, "deleted_comment_id": cid}
+
+
 @mcp.tool()
 def jira_link(ticket: str, target: str, link_type: str = "Relates") -> dict:
     """Link two JIRA tickets together.
