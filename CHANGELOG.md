@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `jira_web_link` tool: add a web (remote) link, such as a merge request URL,
   to a ticket via `POST /issue/{key}/remotelink`. Only absolute http(s) URLs
   are accepted (no `javascript:`/`file:` schemes, no control characters). It is
-  idempotent: a link with the same URL is not duplicated and the existing one is
+  idempotent: a link with the same URL is not duplicated (the request carries a URL-derived globalId so JIRA upserts server-side) and the existing one is
   returned with `created: false`.
 - `jira_web_links` tool: list a ticket's web links.
 - `jira_delete_comment` tool: delete a comment by numeric id (the id returned by
