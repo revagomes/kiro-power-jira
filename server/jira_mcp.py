@@ -14,6 +14,7 @@ Run via:
     uvx --from fastmcp fastmcp run server/jira_mcp.py
 """
 
+import hashlib
 import json
 import os
 import pathlib
@@ -902,7 +903,7 @@ def jira_comment(ticket: str, body: str) -> dict:
     }
 
 
-_COMMENT_ID_RE = re.compile(r"^\d+$")
+_COMMENT_ID_RE = re.compile(r"[0-9]+")  # ASCII digits only (\d matches Unicode)
 
 
 def _validate_web_url(url: str) -> str:
@@ -915,11 +916,23 @@ def _validate_web_url(url: str) -> str:
     if any(ord(c) < 32 or ord(c) == 127 for c in candidate):
         raise ValueError("Invalid URL: contains control characters.")
     parsed = urllib.parse.urlparse(candidate)
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+    # hostname (not netloc): "https://:443/x" and "https://user@/x" have a netloc
+    # but no host.
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
         raise ValueError(
             f"Invalid URL: '{url}'. Expected an absolute http(s) URL."
         )
     return candidate
+
+
+def _web_link_global_id(url: str) -> str:
+    """Deterministic JIRA remote-link globalId derived from the URL.
+
+    JIRA creates-or-updates a remote link server-side when a link with the same
+    globalId already exists on the issue, so two overlapping calls for the same
+    URL cannot both create one.
+    """
+    return "jira-mcp-web-link:" + hashlib.sha256(url.encode("utf-8")).hexdigest()
 
 
 def _remote_links(ticket_key: str) -> list[dict]:
@@ -958,13 +971,37 @@ def jira_web_link(ticket: str, url: str, title: str = "", summary: str = "") -> 
     obj = {"url": link_url, "title": link_title}
     if summary.strip():
         obj["summary"] = summary.strip()
-    result = _jira_post(f"/issue/{key}/remotelink", {"object": obj})
+    result = _jira_post(
+        f"/issue/{key}/remotelink",
+        {"globalId": _web_link_global_id(link_url), "object": obj},
+    )
+    link_id = str(result.get("id", "")) if isinstance(result, dict) else ""
+    if link_id:
+        return {
+            "ticket": key,
+            "link_id": link_id,
+            "url": link_url,
+            "title": link_title,
+            "created": True,
+        }
+    # No new id: JIRA updated an existing link (a concurrent call created it
+    # between our lookup and this request). Report the real link, not a new one.
+    for link in _remote_links(key):
+        obj_found = link.get("object") or {}
+        if obj_found.get("url") == link_url:
+            return {
+                "ticket": key,
+                "link_id": str(link.get("id", "")),
+                "url": link_url,
+                "title": obj_found.get("title", ""),
+                "created": False,
+            }
     return {
         "ticket": key,
-        "link_id": str(result.get("id", "")),
+        "link_id": "",
         "url": link_url,
         "title": link_title,
-        "created": True,
+        "created": False,
     }
 
 
@@ -999,7 +1036,7 @@ def jira_delete_comment(ticket: str, comment_id: str) -> dict:
     """
     key = _validate_key(ticket)
     cid = str(comment_id).strip()
-    if not _COMMENT_ID_RE.match(cid):
+    if not _COMMENT_ID_RE.fullmatch(cid):
         raise ValueError(f"Invalid comment id: '{comment_id}'. Expected digits only.")
     _jira_delete(f"/issue/{key}/comment/{cid}")
     return {"ticket": key, "deleted_comment_id": cid}
