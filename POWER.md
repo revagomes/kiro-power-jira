@@ -64,6 +64,9 @@ If any required variable is missing, the server returns an actionable error mess
 | `jira_change_issue_type` | Change a ticket's issue type (e.g. Task → Bug) |
 | `jira_comment` | Add a comment to a ticket |
 | `jira_link` | Link two tickets together |
+| `jira_web_link` | Add a web link (e.g. a merge request URL) to a ticket's Web Links panel; idempotent |
+| `jira_web_links` | List a ticket's web links |
+| `jira_delete_comment` | Delete a comment by id (irreversible; author or project admin only) |
 | `jira_boards` | List project Scrum/Kanban boards |
 | `jira_sprints` | List active/future sprints for a board |
 | `jira_sprint_issues` | List issues in a specific sprint |
@@ -125,10 +128,11 @@ User: "Create a task 'Refactor auth' under epic PROJ-100"
 → Call `jira_create(summary="Refactor auth", epic_link="PROJ-100")`
 The "Epic Link" field id is resolved by name at runtime, so no instance-specific id is hardcoded. Use `story_points=` for estimates, or `custom_fields={"<name or id>": value}` for any other instance-specific field.
 
-### Post MR link as comment
+### Link an MR to a ticket
 
-User: "Post the MR link to PROJ-1234"
-→ Call `jira_comment(ticket="PROJ-1234", body="GitLab MR: [title|url]")`
+User: "Link the MR to PROJ-1234"
+→ Call `jira_web_link(ticket="PROJ-1234", url="https://gitlab.example.com/.../merge_requests/42", title="MR !42")`
+The link appears in the ticket's Web Links panel and is not duplicated if the same URL is added again. Use `jira_comment` only when a note is needed besides the link, and `jira_delete_comment(ticket, comment_id)` to remove a comment posted by mistake (the id is returned by `jira_comment`).
 
 ## JQL Quick Reference
 

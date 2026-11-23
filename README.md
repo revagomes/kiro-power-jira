@@ -9,7 +9,7 @@ Works with **any JIRA instance** (Cloud or Server) and **any project** — fully
 
 ## What It Does
 
-This power exposes 25 MCP tools for interacting with the JIRA REST API v2:
+This power exposes 28 MCP tools for interacting with the JIRA REST API v2:
 
 - **Query:** View tickets, search with JQL, list your open/recent work, browse backlog/sprint
 - **Mutate:** Create tickets, update fields (including epic link, story points, and arbitrary custom fields), transition status, add comments, link tickets
@@ -35,6 +35,9 @@ This power exposes 25 MCP tools for interacting with the JIRA REST API v2:
 | `jira_change_issue_type` | Change a ticket's issue type (e.g. Task → Bug) |
 | `jira_comment` | Add a comment to a ticket |
 | `jira_link` | Link two tickets together |
+| `jira_web_link` | Add a web link (e.g. a merge request URL) to a ticket's Web Links panel; idempotent |
+| `jira_web_links` | List a ticket's web links |
+| `jira_delete_comment` | Delete a comment by id (irreversible; author or project admin only) |
 | `jira_boards` | List project Scrum/Kanban boards |
 | `jira_sprints` | List active/future sprints for a board |
 | `jira_sprint_issues` | List issues in a specific sprint |
