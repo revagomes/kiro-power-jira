@@ -16,7 +16,7 @@ When the user indicates they are starting work on a JIRA ticket (mentioning a ti
 
 When the user has finished implementation, created a commit, or is ready to submit:
 
-1. **Post the MR link** — Call `jira_comment` with the MR/PR URL in Jira markup: `[MR Title|URL]`
+1. **Link the MR** — Call `jira_web_link(ticket, url, title)` with the MR/PR URL so it shows in the ticket's Web Links panel (use `jira_comment` only for extra notes)
 2. **Transition to In Review** — Call `jira_transition(ticket, "In Review")`
 
 ## When Picking Up the Next Task
