@@ -37,7 +37,7 @@ This power exposes 28 MCP tools for interacting with the JIRA REST API v2:
 | `jira_link` | Link two tickets together |
 | `jira_web_link` | Add a web link (e.g. a merge request URL) to a ticket's Web Links panel; idempotent |
 | `jira_web_links` | List a ticket's web links |
-| `jira_delete_comment` | Delete a comment by id (irreversible; author or project admin only) |
+| `jira_delete_comment` | Delete a comment by id (irreversible; needs `confirm=True`; author or project admin only) |
 | `jira_boards` | List project Scrum/Kanban boards |
 | `jira_sprints` | List active/future sprints for a board |
 | `jira_sprint_issues` | List issues in a specific sprint |

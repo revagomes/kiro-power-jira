@@ -15,7 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returned with `created: false`.
 - `jira_web_links` tool: list a ticket's web links.
 - `jira_delete_comment` tool: delete a comment by numeric id (the id returned by
-  `jira_comment`); the id is validated so it cannot alter the request path.
+  `jira_comment`); the id is ASCII-digits only so it cannot alter the request
+  path, and nothing is deleted unless the caller passes `confirm=True`.
+- `_api_request(..., return_status=True)` returns `(http_status, data)`;
+  `jira_web_link` uses it to report `created: true` only for HTTP 201 (JIRA
+  answers 200 with the existing id when it updates a link with the same
+  `globalId`).
 
 ### Tests
 - Offline tests for the three tools: payload and path shape, idempotency, URL

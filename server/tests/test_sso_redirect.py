@@ -191,3 +191,24 @@ def test_empty_body_returns_empty_dict(jira, monkeypatch):
     _install_opener(jira, monkeypatch, _EmptyOpener())
 
     assert jira._api_request("https://jira.example.com/x", method="DELETE") == {}
+
+
+def test_return_status_exposes_the_http_status(jira, monkeypatch):
+    """return_status=True yields (status, data) so 201 and 200 can be told apart."""
+
+    class _CreatedResponse(_FakeResponse):
+        status = 201
+
+    class _CreatedOpener:
+        def open(self, req, timeout=None):
+            return _CreatedResponse(
+                b'{"id": 7}', "application/json", "https://jira.example.com/x"
+            )
+
+    _install_opener(jira, monkeypatch, _CreatedOpener())
+
+    assert jira._api_request(
+        "https://jira.example.com/x", method="POST", payload={}, return_status=True
+    ) == (201, {"id": 7})
+    # The default return shape is unchanged.
+    assert jira._api_request("https://jira.example.com/x") == {"id": 7}
