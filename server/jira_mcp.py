@@ -258,9 +258,16 @@ _OPENER = urllib.request.build_opener(_NoCrossHostRedirect())
 
 
 def _api_request(
-    url: str, method: str = "GET", payload: dict | None = None
-) -> dict | list:
-    """Authenticated request to JIRA REST API."""
+    url: str,
+    method: str = "GET",
+    payload: dict | None = None,
+    return_status: bool = False,
+) -> dict | list | tuple[int, dict | list]:
+    """Authenticated request to JIRA REST API.
+
+    With ``return_status=True`` the result is ``(http_status, data)`` so callers
+    can tell e.g. 201 Created from 200 OK; the default returns the data only.
+    """
     pat = _get_pat()
     headers = {"Authorization": f"Bearer {pat}"}
     data = None
@@ -280,8 +287,9 @@ def _api_request(
         # instead of a downstream JSON parse failure.
         with _OPENER.open(req, timeout=30) as resp:
             body = resp.read()
+            status = getattr(resp, "status", 200)
             if not body:
-                return {}
+                return (status, {}) if return_status else {}
             # A JIRA API endpoint returns JSON.  If we got HTML (or anything
             # else), we were almost certainly served a login/redirect page by
             # a proxy in front of JIRA rather than real API data.
@@ -295,7 +303,8 @@ def _api_request(
                     status=None,
                 )
             try:
-                return json.loads(body)
+                data = json.loads(body)
+                return (status, data) if return_status else data
             except json.JSONDecodeError as e:
                 raise JiraApiError(
                     f"JIRA returned a non-JSON response from {resp.geturl()} "
@@ -912,9 +921,11 @@ def _validate_web_url(url: str) -> str:
     Rejects other schemes (javascript:, file:, ftp:, ...) so a link added to a
     ticket can never execute script or point at a local file when clicked.
     """
-    candidate = url.strip()
-    if any(ord(c) < 32 or ord(c) == 127 for c in candidate):
+    # Check the raw input: strip() would silently drop leading/trailing control
+    # characters (newline, tab, NUL) and let them through.
+    if any(ord(c) < 32 or ord(c) == 127 for c in url):
         raise ValueError("Invalid URL: contains control characters.")
+    candidate = url.strip()
     parsed = urllib.parse.urlparse(candidate)
     # hostname (not netloc): "https://:443/x" and "https://user@/x" have a netloc
     # but no host.
@@ -971,21 +982,24 @@ def jira_web_link(ticket: str, url: str, title: str = "", summary: str = "") -> 
     obj = {"url": link_url, "title": link_title}
     if summary.strip():
         obj["summary"] = summary.strip()
-    result = _jira_post(
-        f"/issue/{key}/remotelink",
-        {"globalId": _web_link_global_id(link_url), "object": obj},
+    status, result = _api_request(
+        f"{JIRA_BASE}/issue/{key}/remotelink",
+        method="POST",
+        payload={"globalId": _web_link_global_id(link_url), "object": obj},
+        return_status=True,
     )
     link_id = str(result.get("id", "")) if isinstance(result, dict) else ""
     if link_id:
+        # 201 = created; 200 = JIRA updated the link that already carried this
+        # globalId (a concurrent call created it after our lookup).
         return {
             "ticket": key,
             "link_id": link_id,
             "url": link_url,
             "title": link_title,
-            "created": True,
+            "created": status == 201,
         }
-    # No new id: JIRA updated an existing link (a concurrent call created it
-    # between our lookup and this request). Report the real link, not a new one.
+    # No id in the answer: resolve the real link instead of reporting a new one.
     for link in _remote_links(key):
         obj_found = link.get("object") or {}
         if obj_found.get("url") == link_url:
@@ -1024,16 +1038,24 @@ def jira_web_links(ticket: str) -> list[dict]:
 
 
 @mcp.tool()
-def jira_delete_comment(ticket: str, comment_id: str) -> dict:
+def jira_delete_comment(ticket: str, comment_id: str, confirm: bool = False) -> dict:
     """Delete a comment from a JIRA ticket (irreversible).
 
     Use the comment_id returned by jira_comment. Only the comment's author or a
-    project admin can delete it; JIRA answers 403 otherwise.
+    project admin can delete it; JIRA answers 403 otherwise. Nothing is deleted
+    unless the caller passes confirm=True, so a mistaken or injected call cannot
+    remove a comment by accident.
 
     Args:
         ticket: Ticket key, e.g. PROJ-1234
         comment_id: Numeric comment id
+        confirm: Must be True to perform the deletion
     """
+    if confirm is not True:
+        raise ValueError(
+            "Refusing to delete: this is irreversible. Retry with confirm=True "
+            "once the user has approved deleting this comment."
+        )
     key = _validate_key(ticket)
     cid = str(comment_id).strip()
     if not _COMMENT_ID_RE.fullmatch(cid):

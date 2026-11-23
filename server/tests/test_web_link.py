@@ -3,20 +3,26 @@
 import pytest
 
 
-def _install(jira, monkeypatch, *, existing=None):
+def _install(jira, monkeypatch, *, existing=None, post_status=201, post_body=None):
     """Replace _api_request with a recorder.
 
     ``existing`` is the list returned by GET /issue/{key}/remotelink.
+    ``post_status``/``post_body`` model JIRA's answer to the remotelink POST
+    (201 on create, 200 on update of an existing globalId).
     Returns the list of recorded (method, url, payload) tuples.
     """
     calls = []
 
-    def fake(url, method="GET", payload=None):
+    def fake(url, method="GET", payload=None, return_status=False):
         calls.append((method, url, payload))
         if url.endswith("/remotelink") and method == "GET":
             return existing or []
         if url.endswith("/remotelink") and method == "POST":
-            return {"id": 10042, "self": url + "/10042"}
+            body = post_body if post_body is not None else {
+                "id": 10042,
+                "self": url + "/10042",
+            }
+            return (post_status, body) if return_status else body
         return {}
 
     monkeypatch.setattr(jira, "_api_request", fake)
@@ -96,6 +102,9 @@ def test_web_link_is_idempotent_for_an_existing_url(jira, monkeypatch):
         "https://user@/mr/42",
         "",
         "https://x.example.com/a\nb",
+        "\nhttps://x.example.com/a",
+        "https://x.example.com/a\t",
+        "\x00https://x.example.com/a",
     ],
 )
 def test_web_link_rejects_unsafe_urls(jira, monkeypatch, bad_url):
@@ -140,29 +149,47 @@ def test_overlapping_calls_send_the_same_global_id(jira, monkeypatch):
     assert global_ids[0] == global_ids[1]
 
 
-def test_web_link_reports_update_when_jira_updated_instead_of_created(
+def test_web_link_reports_update_when_jira_answers_200_with_an_existing_id(
     jira, monkeypatch
 ):
-    """An upsert that updated an existing link returns no new id.
+    """JIRA's upsert answers 200 + the existing id when the globalId exists.
 
     A concurrent call created the link between our lookup and our POST, so JIRA
-    updated it. We must report created=False and resolve the real link id.
+    updated it instead. That is not a creation, even though an id is returned.
     """
-    calls = []
-    lookups = iter([[], [{"id": 55, "object": {"url": "https://x.example.com/a", "title": "A"}}]])
+    _install(jira, monkeypatch, post_status=200, post_body={"id": 55})
 
-    def fake(url, method="GET", payload=None):
-        calls.append((method, url, payload))
+    result = jira.jira_web_link("TEST-1", "https://x.example.com/a", "A")
+
+    assert result["created"] is False
+    assert result["link_id"] == "55"
+
+
+def test_web_link_reports_created_only_for_http_201(jira, monkeypatch):
+    _install(jira, monkeypatch, post_status=201, post_body={"id": 56})
+
+    result = jira.jira_web_link("TEST-1", "https://x.example.com/a", "A")
+
+    assert result["created"] is True
+    assert result["link_id"] == "56"
+
+
+def test_web_link_without_returned_id_resolves_it_from_the_links(jira, monkeypatch):
+    lookups = iter(
+        [[], [{"id": 57, "object": {"url": "https://x.example.com/a", "title": "A"}}]]
+    )
+
+    def fake(url, method="GET", payload=None, return_status=False):
         if method == "GET" and url.endswith("/remotelink"):
             return next(lookups)
-        return {}
+        return (200, {}) if return_status else {}
 
     monkeypatch.setattr(jira, "_api_request", fake)
 
     result = jira.jira_web_link("TEST-1", "https://x.example.com/a", "A")
 
     assert result["created"] is False
-    assert result["link_id"] == "55"
+    assert result["link_id"] == "57"
 
 
 # ── jira_web_links ────────────────────────────────────────────────────────────
@@ -189,7 +216,7 @@ def test_web_links_lists_existing_links(jira, monkeypatch):
 def test_delete_comment_issues_delete_on_the_comment_path(jira, monkeypatch):
     calls = _install(jira, monkeypatch)
 
-    result = jira.jira_delete_comment("test-1", "9568584")
+    result = jira.jira_delete_comment("test-1", "9568584", confirm=True)
 
     assert calls == [
         (
@@ -201,6 +228,18 @@ def test_delete_comment_issues_delete_on_the_comment_path(jira, monkeypatch):
     assert result == {"ticket": "TEST-1", "deleted_comment_id": "9568584"}
 
 
+def test_delete_comment_requires_explicit_confirmation(jira, monkeypatch):
+    """The irreversible DELETE must be opted into per call."""
+    calls = _install(jira, monkeypatch)
+
+    with pytest.raises(ValueError, match="confirm"):
+        jira.jira_delete_comment("TEST-1", "9568584")
+    with pytest.raises(ValueError, match="confirm"):
+        jira.jira_delete_comment("TEST-1", "9568584", confirm=False)
+
+    assert calls == []
+
+
 @pytest.mark.parametrize(
     "bad_id", ["", "abc", "12/../34", "1 2", "12?x=1", "١٢٣", "12\n3"]
 )
@@ -208,7 +247,7 @@ def test_delete_comment_rejects_non_numeric_ids(jira, monkeypatch, bad_id):
     calls = _install(jira, monkeypatch)
 
     with pytest.raises(ValueError):
-        jira.jira_delete_comment("TEST-1", bad_id)
+        jira.jira_delete_comment("TEST-1", bad_id, confirm=True)
 
     assert calls == []
 
@@ -217,6 +256,6 @@ def test_delete_comment_rejects_invalid_ticket_key(jira, monkeypatch):
     calls = _install(jira, monkeypatch)
 
     with pytest.raises(ValueError):
-        jira.jira_delete_comment("nope", "123")
+        jira.jira_delete_comment("nope", "123", confirm=True)
 
     assert calls == []
