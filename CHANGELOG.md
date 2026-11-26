@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-11-26
+
+### Fixed
+- `jira_link` with the default (or an explicit) `"Relates"` type now works on
+  instances that name it differently: on the 404 it looks up the instance's
+  equivalent (`Related`, `Relation`, `Relationship`, case-insensitive), retries
+  once with it and reports the type used. Other unknown types still raise the
+  error listing the valid names.
+- `jira_link` retries once with the instance's spelling when the type differs
+  only by case (e.g. `related` vs `Related`).
+- `jira_link` no longer reports "Unknown link type" when the type exists and the
+  404 is about the issues (e.g. a missing ticket); the original error is raised.
+
 ## [0.6.0] - 2026-11-23
 
 ### Added

@@ -232,9 +232,11 @@ Notes:
 ### Linking tickets
 
 `jira_link` defaults to the JIRA-standard link type `"Relates"`. If your instance names
-the type differently (some use `"Related"`), an unknown type no longer returns a raw HTTP
-404 — instead the tool lists the valid link-type names for your instance so you can retry
-with the correct one.
+the type differently (some use `"Related"`), the tool looks up the instance's equivalent
+(`Related`, `Relation` or `Relationship`, case-insensitive) and links with it; the result
+shows the type actually used. Any other unknown type does not return a raw HTTP 404 —
+instead the tool lists the valid link-type names for your instance so you can retry with
+the correct one.
 
 ### Changing an issue's type
 
