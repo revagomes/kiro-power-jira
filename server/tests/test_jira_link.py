@@ -222,3 +222,34 @@ def test_link_fallback_retry_failure_propagates_once(jira, monkeypatch):
     with pytest.raises(jira.JiraApiError):
         jira.jira_link("TEST-1", "TEST-9999")
     assert [c[2]["type"]["name"] for c in calls if c[0] == "POST"] == ["Relates", "Related"]
+
+
+def test_link_wrong_case_type_is_retried_with_the_instance_spelling(jira, monkeypatch):
+    """A type given in the wrong case is retried once with the instance's spelling."""
+    calls, fake = _catalog_recorder(jira, ["Related", "Blocks"])
+    monkeypatch.setattr(jira, "_api_request", fake)
+    # Make the first POST fail as a type 404 (the fake only accepts exact names).
+    result = jira.jira_link("TEST-1", "TEST-2", link_type="related")
+
+    posts = [c[2]["type"]["name"] for c in calls if c[0] == "POST"]
+    assert posts == ["related", "Related"]
+    assert result["linked"] == "TEST-1 --[Related]--> TEST-2"
+
+
+def test_link_wrong_case_type_with_missing_ticket_raises_the_real_error(jira, monkeypatch):
+    """The type exists (ignoring case): a 404 on the retry is about the issue."""
+    calls = []
+
+    def fake(url, method="GET", payload=None):
+        calls.append((method, url, payload))
+        if url.endswith("/issueLinkType") and method == "GET":
+            return {"issueLinkTypes": [{"id": "1", "name": "Related"}]}
+        if url.endswith("/issueLink") and method == "POST":
+            raise jira.JiraApiError("Issue Does Not Exist", status=404)
+        return {}
+
+    monkeypatch.setattr(jira, "_api_request", fake)
+    with pytest.raises(jira.JiraApiError) as exc:
+        jira.jira_link("TEST-1", "TEST-9999", link_type="related")
+    assert exc.value.status == 404
+    assert [c[2]["type"]["name"] for c in calls if c[0] == "POST"] == ["related", "Related"]

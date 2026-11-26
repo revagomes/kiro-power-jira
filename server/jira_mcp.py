@@ -1113,11 +1113,17 @@ def jira_link(ticket: str, target: str, link_type: str = "Relates") -> dict:
         if e.status != 404:
             raise
         valid = _valid_link_type_names()
-        if link_type in valid:
-            # The type exists, so the 404 is about the issues (e.g. a missing
-            # ticket): surface the original error instead of a bogus type error.
+        canonical = next((v for v in valid if v.lower() == link_type.lower()), None)
+        if canonical == link_type:
+            # The type exists exactly as given, so the 404 is about the issues
+            # (e.g. a missing ticket): surface the original error instead of a
+            # bogus type error.
             raise
-        fallback = _relates_equivalent(valid) if link_type.lower() == "relates" else None
+        # A type that differs only by case is retried once with the instance's
+        # spelling; otherwise "Relates" falls back to the instance's equivalent.
+        fallback = canonical or (
+            _relates_equivalent(valid) if link_type.lower() == "relates" else None
+        )
         if fallback is None or fallback == link_type:
             listed = ", ".join(valid) if valid else "(none returned by the instance)"
             raise ValueError(
