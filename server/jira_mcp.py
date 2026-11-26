@@ -1064,14 +1064,37 @@ def jira_delete_comment(ticket: str, comment_id: str, confirm: bool = False) -> 
     return {"ticket": key, "deleted_comment_id": cid}
 
 
+_RELATES_FAMILY = ("relates", "related", "relation", "relationship")
+
+
+def _post_issue_link(src: str, dst: str, link_type: str) -> None:
+    """POST one issue link of the given type."""
+    _jira_post("/issueLink", {
+        "type": {"name": link_type},
+        "inwardIssue": {"key": src},
+        "outwardIssue": {"key": dst},
+    })
+
+
+def _relates_equivalent(valid: list[str]) -> str | None:
+    """Return the instance's name for the standard "Relates" type, if any."""
+    by_lower = {name.lower(): name for name in valid}
+    for candidate in _RELATES_FAMILY:
+        if candidate in by_lower:
+            return by_lower[candidate]
+    return None
+
+
 @mcp.tool()
 def jira_link(ticket: str, target: str, link_type: str = "Relates") -> dict:
     """Link two JIRA tickets together.
 
     The default link type is the JIRA-standard "Relates". Some instances name
-    this link type differently (e.g. "Related"). If the given type is not known
-    to the instance, this raises a ValueError listing the valid type names for
-    that instance instead of surfacing a raw HTTP 404.
+    this link type differently (e.g. "Related"); when "Relates" is unknown, the
+    instance's equivalent is looked up and used instead, and the returned
+    "linked" text shows the type actually used. For any other unknown type,
+    this raises a ValueError listing the valid type names for that instance
+    instead of surfacing a raw HTTP 404.
 
     Args:
         ticket: Source ticket key
@@ -1080,13 +1103,8 @@ def jira_link(ticket: str, target: str, link_type: str = "Relates") -> dict:
     """
     src = _validate_key(ticket)
     dst = _validate_key(target)
-    payload = {
-        "type": {"name": link_type},
-        "inwardIssue": {"key": src},
-        "outwardIssue": {"key": dst},
-    }
     try:
-        _jira_post("/issueLink", payload)
+        _post_issue_link(src, dst, link_type)
     except JiraApiError as e:
         # A 404 means the instance has no link type with that name. Detect it via
         # the structured status code (never a substring on the message, which
@@ -1095,11 +1113,19 @@ def jira_link(ticket: str, target: str, link_type: str = "Relates") -> dict:
         if e.status != 404:
             raise
         valid = _valid_link_type_names()
-        listed = ", ".join(valid) if valid else "(none returned by the instance)"
-        raise ValueError(
-            f"Unknown link type '{link_type}' for this JIRA instance. "
-            f"Valid link types: {listed}."
-        ) from e
+        if link_type in valid:
+            # The type exists, so the 404 is about the issues (e.g. a missing
+            # ticket): surface the original error instead of a bogus type error.
+            raise
+        fallback = _relates_equivalent(valid) if link_type.lower() == "relates" else None
+        if fallback is None or fallback == link_type:
+            listed = ", ".join(valid) if valid else "(none returned by the instance)"
+            raise ValueError(
+                f"Unknown link type '{link_type}' for this JIRA instance. "
+                f"Valid link types: {listed}."
+            ) from e
+        _post_issue_link(src, dst, fallback)
+        link_type = fallback
     return {"linked": f"{src} --[{link_type}]--> {dst}"}
 
 
